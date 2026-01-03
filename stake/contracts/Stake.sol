@@ -8,10 +8,10 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /**
- * @title Stakee
- * @notice 质押合约：
+ * @title Stake
+ * @notice 质押合约：用于质押代币，并获得奖励
  */
-contract Stakee is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
+contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
     bytes32 public ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
