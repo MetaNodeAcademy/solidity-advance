@@ -3,15 +3,12 @@ import { network } from "hardhat";
 
 const { ethers, networkHelpers } = await network.connect();
 
-// 定义 fixture 函数
 async function deployCounterFixture() {
   // 部署合约
   const counter = await ethers.deployContract("Counter");
 
   // 获取部署时的区块号
   const deploymentBlockNumber = await ethers.provider.getBlockNumber();
-
-  // 返回需要在测试中使用的对象
   return { counter, deploymentBlockNumber };
 }
 
