@@ -5,12 +5,12 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title SSToken
+ * @title SKToken
  * @author Jss
- * @notice 质押奖励合约
+ * @notice 质押代币合约
  */
-contract SSToken is ERC20, Ownable {
-    constructor() ERC20("SSToken", "SST") Ownable(msg.sender) {
+contract SKToken is ERC20, Ownable {
+    constructor() ERC20("Stakeoken", "SKT") Ownable(msg.sender) {
         _mint(msg.sender, 10 ** 8);
     }
 

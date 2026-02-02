@@ -31,9 +31,9 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
          */
         uint256 stakeAmount;
         /**
-         * @notice 质押一个代币经过一个区块获得的奖励数量
+         * @notice 质押一个代币累计获得的奖励数量(1 ether为单位)
          */
-        uint256 perRewardCount;
+        uint256 accRewardCount;
         /**
          * @notice 上次计算奖励的区块
          */
@@ -199,15 +199,13 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
      * @param weight 权重
      * @param minStakeCount 最小质押数量
      * @param unlockBlockCount 解除质押需要的区块数量
-     * @return poolId 池子ID
      */
     function addPool(
         address tokenAddr,
         uint256 weight,
         uint256 minStakeCount,
         uint256 unlockBlockCount
-    ) public onlyRole(ADMIN_ROLE) returns (uint256) {
-        uint256 length = poolList.length;
+    ) public onlyRole(ADMIN_ROLE) {
         bool isExist = poolMap[tokenAddr];
         require(!isExist, "Pool already exists");
         require(weight > 0, "Invalid weight");
@@ -221,7 +219,7 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
             PoolInfo({
                 tokenAddr: tokenAddr,
                 stakeAmount: 0,
-                perRewardCount: 0,
+                accRewardCount: 0,
                 lastCalcBlock: b,
                 weight: weight,
                 unlockBlockCount: unlockBlockCount,
@@ -230,7 +228,6 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
         );
 
         emit PoolAddedEvent(tokenAddr, weight, unlockBlockCount, minStakeCount);
-        return length;
     }
 
     /**
@@ -250,14 +247,18 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
         }
 
         updatePool(poolId);
+        User storage user = userInfo[poolId][msg.sender];
+        uint256 accRewardCount = pool.accRewardCount;
+        user.pendingAmount = (user.stakeAmount * accRewardCount) / 1 ether - user.rewardAmount + user.pendingAmount;
+
         (bool success, uint256 value) = pool.stakeAmount.tryAdd(amount);
         require(success, "add operation overflow");
         pool.stakeAmount = value;
 
-        User storage user = userInfo[poolId][msg.sender];
         (bool success2, uint256 value2) = user.stakeAmount.tryAdd(amount);
         require(success2, "add operation overflow");
         user.stakeAmount = value2;
+        user.rewardAmount = (user.stakeAmount * accRewardCount) / 1 ether;
 
         emit StakeEvent(poolId, msg.sender, amount);
     }
@@ -272,9 +273,13 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
         User storage user = userInfo[poolId][msg.sender];
         require(amount <= user.stakeAmount, "Invalid amount");
         updatePool(poolId);
+        pool.stakeAmount = pool.stakeAmount - amount;
+
+        uint256 accRewardCount = pool.accRewardCount;
+        user.pendingAmount = (user.stakeAmount * accRewardCount) / 1 ether - user.rewardAmount + user.pendingAmount;
 
         user.stakeAmount = user.stakeAmount - amount;
-        pool.stakeAmount = pool.stakeAmount - amount;
+        user.rewardAmount = (user.stakeAmount * accRewardCount) / 1 ether;
 
         user.unstakeInfos.push(UnstakeInfo({blockNumber: block.number + pool.unlockBlockCount, amount: amount}));
         emit UnstakeEvent(poolId, msg.sender, amount);
@@ -324,9 +329,19 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
      * @param poolId 池子ID
      */
     function claim(uint256 poolId) public checkPid(poolId) whenNotPaused {
-        updatePool(poolId);
         PoolInfo storage pool = poolList[poolId];
         User storage user = userInfo[poolId][msg.sender];
+
+        updatePool(poolId);
+        uint256 accRewardCount = pool.accRewardCount;
+        uint256 pendingAmount = (user.stakeAmount * accRewardCount) / 1 ether - user.rewardAmount + user.pendingAmount;
+        if (pendingAmount > 0) {
+            user.pendingAmount = 0;
+            _safeTransferERC20(msg.sender, pendingAmount);
+        }
+
+        user.rewardAmount = (user.stakeAmount * accRewardCount) / 1 ether;
+        emit ClaimEvent(poolId, msg.sender, pendingAmount);
     }
 
     /**
@@ -431,12 +446,24 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
     function getPendingReward(uint256 poolId, address userAddr) external view checkPid(poolId) returns (uint256) {
         PoolInfo memory pool = poolList[poolId];
         User memory user = userInfo[poolId][userAddr];
-        uint256 perRewardCount = pool.perRewardCount;
-        if (block.number > pool.lastCalcBlock && pool.stakeAmount > 0 && totalWeight > 0) {
+        uint256 accRewardAmount = pool.accRewardCount;
+        if (block.number > pool.lastCalcBlock && pool.stakeAmount > 0) {
             uint256 totalReward = _getMultiply(pool.lastCalcBlock, block.number);
-            uint256 poolReward = (totalReward * pool.weight) / totalWeight;
+            uint256 value = (totalReward * pool.weight) / totalWeight;
+            accRewardAmount = accRewardAmount + (value * 1 ether) / pool.stakeAmount;
         }
-        return 0;
+
+        return (user.stakeAmount * accRewardAmount) / 1 ether - user.rewardAmount + user.pendingAmount;
+    }
+
+    /**
+     * @notice 获取用户解除质押信息
+     * @param poolId 池子ID
+     * @param userAddr 用户地址
+     * @return 解除质押信息
+     */
+    function getUnstakeInfo(uint256 poolId, address userAddr) external view checkPid(poolId) returns (UnstakeInfo[] memory) {
+        return userInfo[poolId][userAddr].unstakeInfos;
     }
 
     //-------------------------------------------内部方法-----------------------------------------------//
@@ -472,9 +499,9 @@ contract Stake is Initializable, PausableUpgradeable, UUPSUpgradeable, AccessCon
             require(success3, "multiply operation overflow");
             (bool success4, uint256 value4) = value3.tryDiv(totalStake);
             require(success4, "divide operation overflow");
-            (bool success5, uint256 value5) = pool.perRewardCount.tryAdd(value4);
+            (bool success5, uint256 value5) = pool.accRewardCount.tryAdd(value4);
             require(success5, "add operation overflow");
-            pool.perRewardCount = value5;
+            pool.accRewardCount = value5;
         }
 
         pool.lastCalcBlock = block.number;
